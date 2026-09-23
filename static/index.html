@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Coffee Documents Assistant</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">C</div>
+      <div>
+        <h1>Coffee Assistant</h1>
+        <p class="brand-sub">Coffee Board documents</p>
+      </div>
+    </div>
+
+    <div class="panel">
+      <label class="field-label" for="topk">
+        Passages per answer <span id="topk-value">5</span>
+      </label>
+      <input type="range" id="topk" min="3" max="10" value="5" />
+      <p class="hint">More passages give broader context but can distract the model.</p>
+    </div>
+
+    <div class="panel">
+      <h2>How it works</h2>
+      <ol class="steps">
+        <li><span>1</span> Your question is embedded</li>
+        <li><span>2</span> Qdrant hybrid search finds candidates</li>
+        <li><span>3</span> A cross-encoder reranks them</li>
+        <li><span>4</span> The model answers, citing pages</li>
+      </ol>
+    </div>
+
+    <div class="panel status-panel">
+      <div class="status-row">
+        <span class="dot" id="status-dot"></span>
+        <span id="status-text">Connecting…</span>
+      </div>
+      <div class="status-meta" id="status-meta"></div>
+    </div>
+
+    <button id="clear-btn" class="clear-btn">Clear conversation</button>
+  </aside>
+
+  <main class="main">
+    <div class="chat" id="chat">
+      <div class="welcome" id="welcome">
+        <h2>Ask about coffee cultivation</h2>
+        <p>
+          Answers come only from 654 scanned pages of the Coffee Board handbook
+          and research abstracts. Every claim cites the page it came from.
+        </p>
+        <div class="examples">
+          <button class="example">How do I control the coffee berry borer?</button>
+          <button class="example">What causes coffee leaf rust and how is it controlled?</button>
+          <button class="example">What is the difference between wet and dry processing?</button>
+          <button class="example">Which shade trees are recommended, and why?</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="composer">
+      <form id="chat-form">
+        <textarea
+          id="question"
+          rows="1"
+          placeholder="Ask a question about coffee cultivation…"
+          autocomplete="off"
+        ></textarea>
+        <button type="submit" id="send-btn" title="Send">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+            <path d="M3.4 20.4 21 12 3.4 3.6 3.4 10.2 15.6 12 3.4 13.8z" fill="currentColor"/>
+          </svg>
+        </button>
+      </form>
+      <p class="composer-hint">Enter to send • Shift+Enter for a new line</p>
+    </div>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
