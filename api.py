@@ -104,11 +104,14 @@ async def chat(request: ChatRequest) -> StreamingResponse:
         try:
             # Retrieval and the Groq call are blocking, so run them off the event
             # loop to keep the server responsive to other requests.
-            hits, token_iter = await asyncio.to_thread(
+            mode, hits, token_iter = await asyncio.to_thread(
                 answer_stream, client, retriever, request.question, history,
                 request.top_k,
             )
             yield _sse("sources", {
+                # "chat": answered from the conversation, so the UI shows the
+                # previous answer's sources, which its citations still refer to.
+                "mode": mode,
                 "sources": [
                     {
                         "n": i,

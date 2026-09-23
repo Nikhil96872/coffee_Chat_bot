@@ -24,7 +24,7 @@ load_dotenv(ROOT / ".env")
 # Groq's catalogue changes over time; run `client.models.list()` to see what the
 # account can currently reach. gpt-oss-120b is the strongest general model there.
 MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
-MAX_HISTORY_TURNS = 6
+MAX_HISTORY_TURNS = 10          # messages, i.e. the last five exchanges
 
 SYSTEM_PROMPT = """\
 You answer questions about coffee cultivation using only excerpts from two Indian \
@@ -46,17 +46,52 @@ temperatures, percentages and conditions as the documents state them.
 7. When a passage is a research paper, attribute its findings to the paper's \
 authors and year as given in its header, e.g. "Muthappa and Nataraj (1979) found \
 that ... [2]".
+8. Earlier turns of the conversation are context for follow-up questions. Follow \
+any format the user asks for; use a markdown table for tables, schedules and \
+calendar views.
 """
 
-CONDENSE_PROMPT = """\
-Rewrite the user's latest question into a standalone search query, resolving any \
-pronouns or references to earlier turns. Reply with the query only, nothing else.
+# Follow-ups that only reshape or recall an earlier answer ("only the months",
+# "what did you tell me?") are answered from the conversation. Sending them to
+# retrieval would fetch unrelated passages, and the grounding rules would then
+# make the model reply that the documents say nothing about it.
+CHAT_PROMPT = """\
+You are continuing a conversation about coffee cultivation. Your earlier answers \
+in this conversation were written from excerpts of two Indian Coffee Board \
+documents.
+
+Answer the user's latest message using only what is already in the conversation:
+1. Do not add facts that were not stated earlier in the conversation.
+2. When you reuse a fact, keep its citation marker, such as [1], exactly as it \
+appeared in your earlier answer. Never invent new citation numbers.
+3. Follow any format the user asks for; use a markdown table for tables, \
+schedules and calendar views.
+4. If the message needs information that is not in the conversation, say so in \
+one sentence and suggest asking it as a new question.
+5. Be concise.
+"""
+
+ROUTE_PROMPT = """\
+You route the latest message in a chat about Indian Coffee Board documents on \
+coffee cultivation. Reply with exactly one line, in one of these two forms:
+
+CHAT
+SEARCH: <standalone search query>
+
+Choose CHAT when the message can be answered fully from the conversation so far \
+without looking anything up: reformatting, shortening or translating an earlier \
+answer ("list only the months", "show it as a table"), repeating or summarising \
+what was already said ("what did you tell me?"), or explaining a point already made.
+
+Choose SEARCH when the message needs information that is not already in the \
+conversation, including follow-ups about a new aspect ("how is it controlled?", \
+"what about robusta?"). Write the query so it stands alone, resolving pronouns and \
+references to earlier turns. When unsure, choose SEARCH.
 
 Conversation so far:
 {history}
 
-Latest question: {question}
-Standalone query:"""
+Latest message: {question}"""
 
 
 def get_client() -> Groq:
@@ -71,28 +106,39 @@ def get_client() -> Groq:
     return Groq(api_key=key)
 
 
-def condense_question(client: Groq, history: list[dict], question: str) -> str:
-    """Turn a follow-up like "what about robusta?" into a searchable question.
+def route_question(client: Groq, history: list[dict], question: str) -> tuple[str, str]:
+    """Decide how to answer: ("search", standalone query) or ("chat", "").
 
-    Retrieval sees one query with no memory, so an unresolved follow-up would
-    search for the wrong thing entirely.
+    Retrieval sees one query with no memory, so a follow-up like "what about
+    robusta?" is rewritten to stand alone before searching. A follow-up that
+    only reshapes or recalls an earlier answer needs no search at all.
     """
     if not history:
-        return question
+        return "search", question
     transcript = "\n".join(
-        f"{m['role']}: {m['content'][:300]}" for m in history[-MAX_HISTORY_TURNS:]
+        f"{m['role']}: {m['content'][:600]}" for m in history[-MAX_HISTORY_TURNS:]
     )
     response = client.chat.completions.create(
         model=MODEL,
         messages=[{
             "role": "user",
-            "content": CONDENSE_PROMPT.format(history=transcript, question=question),
+            "content": ROUTE_PROMPT.format(history=transcript, question=question),
         }],
         temperature=0.0,
-        max_tokens=120,
+        # gpt-oss reasons before it replies, and the reasoning counts against
+        # max_tokens: with a tight limit it can run out before writing the
+        # one-line answer. A one-word decision needs little reasoning.
+        max_tokens=1024,
+        reasoning_effort="low",
     )
-    condensed = (response.choices[0].message.content or "").strip()
-    return condensed or question
+    reply = (response.choices[0].message.content or "").replace("\x00", "").strip()
+    first = reply.splitlines()[0].strip() if reply else ""
+    if first.upper().startswith("CHAT"):
+        return "chat", ""
+    if first.upper().startswith("SEARCH"):
+        query = first.split(":", 1)[1].strip() if ":" in first else ""
+        return "search", query or question
+    return "search", question                  # unparseable: searching is safe
 
 
 def build_messages(question: str, hits: list[Hit], history: list[dict]) -> list[dict]:
@@ -114,23 +160,32 @@ def answer_stream(
     question: str,
     history: list[dict] | None = None,
     top_k: int | None = None,
-) -> tuple[list[Hit], Iterator[str]]:
-    """Retrieve, then stream the grounded answer.
+) -> tuple[str, list[Hit], Iterator[str]]:
+    """Route, retrieve if needed, then stream the answer.
 
-    Returns the hits immediately so a UI can show sources while the text streams.
+    Returns the mode ("search" or "chat") and the hits immediately, so a UI can
+    show sources while the text streams. In chat mode there are no new hits:
+    the answer reuses the previous answer's sources.
     """
     history = history or []
-    search_query = condense_question(client, history, question)
-    hits = retriever.search(search_query, top_k=top_k)
+    mode, search_query = route_question(client, history, question)
 
-    if not hits:
-        def empty() -> Iterator[str]:
-            yield "I couldn't find this in the documents."
-        return [], empty()
+    if mode == "chat":
+        messages = [{"role": "system", "content": CHAT_PROMPT}]
+        messages += history[-MAX_HISTORY_TURNS:]
+        messages.append({"role": "user", "content": question})
+        hits: list[Hit] = []
+    else:
+        hits = retriever.search(search_query, top_k=top_k)
+        if not hits:
+            def empty() -> Iterator[str]:
+                yield "I couldn't find this in the documents."
+            return mode, [], empty()
+        messages = build_messages(question, hits, history)
 
     stream = client.chat.completions.create(
         model=MODEL,
-        messages=build_messages(question, hits, history),
+        messages=messages,
         temperature=0.1,
         max_tokens=1024,
         stream=True,
@@ -142,13 +197,13 @@ def answer_stream(
             if piece:
                 yield piece
 
-    return hits, tokens()
+    return mode, hits, tokens()
 
 
 def answer(client: Groq, retriever: Retriever, question: str,
-           history: list[dict] | None = None) -> tuple[list[Hit], str]:
-    hits, stream = answer_stream(client, retriever, question, history)
-    return hits, "".join(stream)
+           history: list[dict] | None = None) -> tuple[str, list[Hit], str]:
+    mode, hits, stream = answer_stream(client, retriever, question, history)
+    return mode, hits, "".join(stream)
 
 
 if __name__ == "__main__":
@@ -168,7 +223,7 @@ if __name__ == "__main__":
             question = input("you > ").strip()
             if not question:
                 continue
-            hits, stream = answer_stream(client, retriever, question, history)
+            mode, hits, stream = answer_stream(client, retriever, question, history)
             print("\nbot > ", end="", flush=True)
             parts = []
             for piece in stream:
@@ -176,7 +231,8 @@ if __name__ == "__main__":
                 sys.stdout.write(piece)
                 sys.stdout.flush()
             reply = "".join(parts)
-            print("\n\nsources:")
+            print("\n\n(answered from the conversation, sources as above)" if mode == "chat"
+                  else "\n\nsources:")
             for i, hit in enumerate(hits, 1):
                 label = hit.heading[:60]
                 if hit.paper:

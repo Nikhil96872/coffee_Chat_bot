@@ -330,6 +330,26 @@ input[type="range"] {
 .bubble p:last-child { margin-bottom: 0; }
 .bubble ul, .bubble ol { margin: 0 0 11px; padding-left: 22px; }
 .bubble li { margin-bottom: 5px; }
+
+/* Tables, e.g. a month-by-month calendar; wide ones scroll inside the bubble. */
+.table-wrap { overflow-x: auto; margin: 0 0 11px; }
+.bubble table {
+  border-collapse: collapse;
+  font-size: 13px;
+  min-width: 60%;
+}
+.bubble th, .bubble td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.bubble th {
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-weight: 600;
+}
+.bubble tbody tr:nth-child(even) td { background: var(--bg-raised); }
 .bubble strong { color: #fff; font-weight: 600; }
 .bubble code {
   background: var(--bg-elevated);

@@ -17,6 +17,7 @@ const statusText = document.getElementById("status-text");
 const statusMeta = document.getElementById("status-meta");
 
 let history = [];       // [{role, content}] sent back for follow-up questions
+let lastSources = [];   // sources of the latest searched answer, for follow-ups
 let busy = false;
 
 /* ------------------------------------------------------------------ utils */
@@ -24,13 +25,46 @@ let busy = false;
 const escapeHtml = (s) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-/** Minimal markdown: bold, inline code, [1] citations, bullets, paragraphs. */
+const isTableRow = (l) => /^\s*\|.*\|\s*$/.test(l);
+const isTableRule = (l) => /^\s*\|?(\s*:?-{2,}:?\s*\|)+\s*:?-*:?\s*\|?\s*$/.test(l);
+
+/** A markdown table: header row, |---| rule, then body rows. */
+function renderTable(lines) {
+  const cells = (l) => l.trim().replace(/^\||\|$/g, "").split("|").map((c) => inline(c.trim()));
+  const head = cells(lines[0]).map((c) => `<th>${c}</th>`).join("");
+  const body = lines
+    .slice(2)
+    .map((l) => `<tr>${cells(l).map((c) => `<td>${c}</td>`).join("")}</tr>`)
+    .join("");
+  return `<div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+/** Minimal markdown: bold, inline code, [1] citations, bullets, tables, paragraphs. */
 function renderMarkdown(text) {
-  const blocks = escapeHtml(text).split(/\n{2,}/);
+  return renderBlocks(escapeHtml(text));
+}
+
+/** renderMarkdown on text that is already HTML-escaped. */
+function renderBlocks(escaped) {
+  const blocks = escaped.split(/\n{2,}/);
   return blocks
     .map((block) => {
       const lines = block.split("\n").filter((l) => l.trim());
       if (!lines.length) return "";
+
+      // A table may follow a lead-in line with no blank line between them.
+      const t = lines.findIndex((l, i) => isTableRow(l) && isTableRule(lines[i + 1] || ""));
+      if (t !== -1) {
+        let end = t + 2;
+        while (end < lines.length && isTableRow(lines[end])) end++;
+        const before = lines.slice(0, t).join("\n");
+        const after = lines.slice(end).join("\n");
+        return (
+          (before ? renderBlocks(before) : "") +
+          renderTable(lines.slice(t, end)) +
+          (after ? renderBlocks(after) : "")
+        );
+      }
 
       const isBullet = lines.every((l) => /^\s*[-*•]\s+/.test(l));
       const isNumber = lines.every((l) => /^\s*\d+[.)]\s+/.test(l));
@@ -128,7 +162,7 @@ function renderSource(s) {
 }
 
 /** Sources grouped by document, so it is plain when an answer draws on both. */
-function renderSources(sources) {
+function renderSources(sources, fromConversation = false) {
   if (!sources.length) return "";
   const groups = new Map();
   for (const s of sources) {
@@ -139,7 +173,8 @@ function renderSources(sources) {
   const order = ["Handbook", "Research papers"];
   const docs = [...groups.keys()].sort((a, b) => order.indexOf(a) - order.indexOf(b));
 
-  const label = docs.map((d) => `${d} ${groups.get(d).length}`).join(" · ");
+  const counts = docs.map((d) => `${d} ${groups.get(d).length}`).join(" · ");
+  const label = fromConversation ? `From the previous answer · ${counts}` : counts;
   const body = docs
     .map(
       (d) => `
@@ -169,6 +204,7 @@ async function ask(question) {
 
   let answer = "";
   let sources = [];
+  let mode = "search";
 
   try {
     const response = await fetch("/api/chat", {
@@ -207,7 +243,11 @@ async function ask(question) {
         const data = JSON.parse(dataMatch[1]);
 
         if (event === "sources") {
-          sources = data.sources;
+          mode = data.mode || "search";
+          // A follow-up answered from the conversation reuses the earlier
+          // answer's citations, so show the sources those numbers refer to.
+          sources = mode === "chat" ? lastSources : data.sources;
+          if (mode !== "chat") lastSources = data.sources;
           bubble.innerHTML = `<div class="thinking"><span class="spinner"></span> Writing the answer…</div>`;
         } else if (event === "token") {
           answer += data.t;
@@ -219,7 +259,7 @@ async function ask(question) {
       }
     }
 
-    bubble.innerHTML = renderMarkdown(answer) + renderSources(sources);
+    bubble.innerHTML = renderMarkdown(answer) + renderSources(sources, mode === "chat");
     history.push({ role: "user", content: question });
     history.push({ role: "assistant", content: answer });
     history = history.slice(-12);
@@ -270,6 +310,7 @@ topkEl.addEventListener("input", () => {
 
 clearBtn.addEventListener("click", () => {
   history = [];
+  lastSources = [];
   chatEl.innerHTML = `
     <div class="welcome" id="welcome">
       <h2>Ask about coffee cultivation</h2>
