@@ -50,6 +50,12 @@ PAPER_CONTEXT_CHARS = 2500
 # it scores at least this; the cross-encoder's scores are logits, and below
 # about -2 its matches stop being about the question.
 MIN_SOURCE_SCORE = -2.0
+# Nearest-neighbour search always returns something, even for "upcoming Telugu
+# movies". Passages the cross-encoder scores below this are dropped, and a
+# question with none left is one the documents don't cover. Measured: the best
+# hit for on-topic questions scored -1.4 or higher, for off-topic ones -4.3 or
+# lower (most near -10).
+MIN_RELEVANCE = -3.0
 
 # BGE was trained with an instruction prefix on the query side only. Using it
 # lifts retrieval quality measurably; passages are embedded without it.
@@ -172,7 +178,7 @@ class Retriever:
         unique: list[Hit] = []
         for hit in hits:
             key = ("paper", hit.paper["paper_id"]) if hit.paper else ("chunk", hit.chunk_id)
-            if key not in seen:
+            if key not in seen and hit.rerank_score >= MIN_RELEVANCE:
                 seen.add(key)
                 unique.append(hit)
         return _include_every_source(unique, top_k)

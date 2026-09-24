@@ -25,6 +25,8 @@ load_dotenv(ROOT / ".env")
 # account can currently reach. gpt-oss-120b is the strongest general model there.
 MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 MAX_HISTORY_TURNS = 10          # messages, i.e. the last five exchanges
+# gpt-oss sometimes cites as 【1】 despite the prompt; the UI only links [1].
+CITATION_BRACKETS = str.maketrans("【】", "[]")
 
 SYSTEM_PROMPT = """\
 You answer questions about coffee cultivation using only excerpts from two Indian \
@@ -34,9 +36,18 @@ Rules:
 1. Answer ONLY from the numbered passages given to you. Never add facts from your \
 own knowledge, even if you are confident they are correct.
 2. Cite the passage numbers you used in square brackets after the relevant claim, \
-like [1] or [2][4].
-3. If the passages do not contain the answer, say "I couldn't find this in the \
-documents." and, if useful, name what the documents do cover nearby. Do not guess.
+like [1] or [2][4]. Use only this form, never 【1†L1-L4】 or line references.
+3. The passages were selected because they relate to the question, so always give \
+the user something useful from them. If they answer the question, answer it. If \
+they do not answer the specific point asked, open with one sentence in this form: \
+"The documents do not specifically address <the point asked>, but they do contain \
+related information that may help." Then present the most relevant related facts \
+from the passages, with citations, and say briefly how each bears on the question. \
+Include only passages with a genuine bearing on it; leave out ones that merely \
+share a word, and do not draw conclusions the passages do not state. Keep it to \
+the opening sentence and a few bullet points, with no table and no closing \
+summary. Never reply "I couldn't find this in the documents." Do not guess or fill the gap \
+from your own knowledge.
 4. The passages come from OCR of scanned pages, so occasional characters are wrong \
 (for example "nemotode" for "nematode"). Read through obvious scanning errors, but \
 never invent a fact to fill a gap.
@@ -49,6 +60,9 @@ that ... [2]".
 8. Earlier turns of the conversation are context for follow-up questions. Follow \
 any format the user asks for; use a markdown table for tables, schedules and \
 calendar views.
+9. If the message is a greeting, thanks or small talk rather than a question \
+(e.g. "hi", "thank you"), ignore the passages and rules 2-3: reply in one or two \
+warm sentences and offer to help with questions about coffee cultivation.
 """
 
 # Follow-ups that only reshape or recall an earlier answer ("only the months",
@@ -70,6 +84,26 @@ schedules and calendar views.
 one sentence and suggest asking it as a new question.
 5. Be concise.
 """
+
+# Questions the documents have nothing on (retrieval found no relevant passage)
+# still get a courteous reply rather than a one-line refusal.
+OFF_TOPIC_PROMPT = """\
+You are the assistant for a coffee cultivation knowledge base built from two \
+Indian Coffee Board documents: a grower's handbook and a compendium of research \
+abstracts. It covers topics such as planting, varieties, shade, nutrition, \
+irrigation, pests and diseases, harvesting and processing.
+
+The user's message is outside what these documents cover. Reply in a friendly, \
+professional tone in two short sentences:
+1. State plainly that the topic is outside what this assistant covers, e.g. \
+"Upcoming Hindi events are outside what I can help with - I answer questions \
+about coffee cultivation from the Coffee Board documents."
+2. Suggest two or three coffee topics they could ask about.
+Do not answer the question itself or offer facts about it from your own knowledge. \
+Start directly with the statement: no filler such as "Thank you for your \
+question", "Thanks for reaching out", "I appreciate", "Unfortunately" or "Sorry".
+If the message is a greeting, thanks or small talk, respond naturally and offer help \
+with coffee questions."""
 
 ROUTE_PROMPT = """\
 You route the latest message in a chat about Indian Coffee Board documents on \
@@ -177,11 +211,13 @@ def answer_stream(
         hits: list[Hit] = []
     else:
         hits = retriever.search(search_query, top_k=top_k)
-        if not hits:
-            def empty() -> Iterator[str]:
-                yield "I couldn't find this in the documents."
-            return mode, [], empty()
-        messages = build_messages(question, hits, history)
+        if hits:
+            messages = build_messages(question, hits, history)
+        else:
+            # Nothing cleared the relevance floor: the question is off-topic
+            # (e.g. movies), not merely unanswered by the documents.
+            messages = [{"role": "system", "content": OFF_TOPIC_PROMPT},
+                        {"role": "user", "content": question}]
 
     stream = client.chat.completions.create(
         model=MODEL,
@@ -195,7 +231,7 @@ def answer_stream(
         for chunk in stream:
             piece = chunk.choices[0].delta.content
             if piece:
-                yield piece
+                yield piece.translate(CITATION_BRACKETS)
 
     return mode, hits, tokens()
 

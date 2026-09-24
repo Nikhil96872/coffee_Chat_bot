@@ -203,7 +203,7 @@ async function ask(question) {
   const bubble = addBotMessage();
 
   let answer = "";
-  let sources = [];
+  let retrieved = [];
   let mode = "search";
 
   try {
@@ -244,10 +244,7 @@ async function ask(question) {
 
         if (event === "sources") {
           mode = data.mode || "search";
-          // A follow-up answered from the conversation reuses the earlier
-          // answer's citations, so show the sources those numbers refer to.
-          sources = mode === "chat" ? lastSources : data.sources;
-          if (mode !== "chat") lastSources = data.sources;
+          retrieved = data.sources;
           bubble.innerHTML = `<div class="thinking"><span class="spinner"></span> Writing the answer…</div>`;
         } else if (event === "token") {
           answer += data.t;
@@ -259,6 +256,19 @@ async function ask(question) {
       }
     }
 
+    // A reply that cites nothing (off-topic, or a greeting like "hi" that still
+    // retrieved something) is not drawn from any passage, so it shows none.
+    const cites = /[\[【]\d{1,2}[\]】]/.test(answer);
+    let sources = [];
+    if (!cites) {
+      // leave empty
+    } else if (mode === "chat") {
+      // A follow-up answered from the conversation reuses the earlier
+      // answer's citations, so show the sources those numbers refer to.
+      sources = lastSources;
+    } else {
+      sources = lastSources = retrieved;
+    }
     bubble.innerHTML = renderMarkdown(answer) + renderSources(sources, mode === "chat");
     history.push({ role: "user", content: question });
     history.push({ role: "assistant", content: answer });
