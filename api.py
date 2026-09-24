@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field
 
 from chunking import PAPER_SOURCES
 from rag import MODEL, answer_stream, get_client
-from retrieval import Retriever
+from retrieval import COLLECTION, Retriever
 
 ROOT = Path(__file__).parent
 STATIC_DIR = ROOT / "static"
@@ -87,7 +87,7 @@ async def health() -> dict:
     retriever = state.get("retriever")
     points = 0
     if retriever is not None:
-        points = retriever.client.get_collection("coffee").points_count
+        points = retriever.client.get_collection(COLLECTION).points_count
     return {"status": "ok", "model": MODEL, "indexed_chunks": points}
 
 

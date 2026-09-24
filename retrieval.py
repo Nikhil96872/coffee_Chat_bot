@@ -21,19 +21,26 @@ from __future__ import annotations
 
 import atexit
 import json
+import os
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
 
+from dotenv import load_dotenv
 from fastembed import SparseTextEmbedding, TextEmbedding
 from fastembed.rerank.cross_encoder import TextCrossEncoder
 from qdrant_client import QdrantClient, models
 
 ROOT = Path(__file__).parent
+load_dotenv(ROOT / ".env")
 QDRANT_PATH = ROOT / "qdrant_data"
 PAPERS_FILE = ROOT / "ocr_text" / "papers.jsonl"
 
-COLLECTION = "coffee"
+# A Qdrant server when QDRANT_URL is set in .env; otherwise the embedded store
+# in qdrant_data/, which only one process can open at a time.
+QDRANT_URL = os.getenv("QDRANT_URL")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY") or None
+COLLECTION = os.getenv("QDRANT_COLLECTION", "coffee")
 DENSE_MODEL = "BAAI/bge-base-en-v1.5"
 SPARSE_MODEL = "Qdrant/bm25"
 RERANK_MODEL = "Xenova/ms-marco-MiniLM-L-6-v2"
@@ -60,6 +67,12 @@ MIN_RELEVANCE = -3.0
 # BGE was trained with an instruction prefix on the query side only. Using it
 # lifts retrieval quality measurably; passages are embedded without it.
 QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
+
+
+def connect() -> QdrantClient:
+    if QDRANT_URL:
+        return QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, timeout=60)
+    return QdrantClient(path=str(QDRANT_PATH))
 
 
 @dataclass
@@ -99,9 +112,11 @@ class Retriever:
 
     def __init__(self, top_k: int = TOP_K) -> None:
         self.top_k = top_k
-        if not QDRANT_PATH.exists():
+        if not QDRANT_URL and not QDRANT_PATH.exists():
             raise SystemExit(f"{QDRANT_PATH} not found - run build_index.py first")
-        self.client = QdrantClient(path=str(QDRANT_PATH))
+        self.client = connect()
+        if not self.client.collection_exists(COLLECTION):
+            raise SystemExit(f"collection '{COLLECTION}' not found - run build_index.py first")
         self.papers = _load_papers()
         # Qdrant's local client releases its file lock from __del__, which on
         # Windows can run after msvcrt has already been torn down and prints a
