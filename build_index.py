@@ -19,20 +19,18 @@ import time
 from pathlib import Path
 
 from fastembed import SparseTextEmbedding, TextEmbedding
-from qdrant_client import QdrantClient, models
+from qdrant_client import models
 
 from chunking import chunk_all
+# Shared with retrieval so the index is always built the way it is searched.
+from retrieval import (COLLECTION, DENSE_MODEL, PAPERS_FILE, QDRANT_PATH,
+                       QDRANT_URL, SPARSE_MODEL, connect)
 
 ROOT = Path(__file__).parent
 PAGES_FILE = ROOT / "ocr_text" / "pages.jsonl"
 CHUNKS_FILE = ROOT / "ocr_text" / "chunks.jsonl"
-PAPERS_FILE = ROOT / "ocr_text" / "papers.jsonl"
-QDRANT_PATH = ROOT / "qdrant_data"
 
-COLLECTION = "coffee"
-DENSE_MODEL = "BAAI/bge-base-en-v1.5"
-SPARSE_MODEL = "Qdrant/bm25"
-DENSE_DIM = 768
+DENSE_DIM = 768                  # output size of DENSE_MODEL
 BATCH = 128
 
 
@@ -73,8 +71,9 @@ def main() -> None:
     sparse_model = SparseTextEmbedding(SPARSE_MODEL)
 
     # A fresh build every time: the collection is cheap to rebuild and this
-    # avoids stale chunks lingering when the chunker or OCR changes.
-    client = QdrantClient(path=str(QDRANT_PATH))
+    # avoids stale chunks lingering when the chunker or OCR changes. Only this
+    # one collection is dropped, which matters on a shared server.
+    client = connect()
     if client.collection_exists(COLLECTION):
         client.delete_collection(COLLECTION)
     client.create_collection(
@@ -119,7 +118,7 @@ def main() -> None:
 
     info = client.get_collection(COLLECTION)
     print(f"\ncollection '{COLLECTION}': {info.points_count} points")
-    print(f"-> {QDRANT_PATH}")
+    print(f"-> {QDRANT_URL or QDRANT_PATH}")
     print(f"done in {(time.perf_counter() - started) / 60:.1f} min")
 
 
