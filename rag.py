@@ -107,20 +107,29 @@ with coffee questions."""
 
 ROUTE_PROMPT = """\
 You route the latest message in a chat about Indian Coffee Board documents on \
-coffee cultivation. Reply with exactly one line, in one of these two forms:
+coffee cultivation. Reply with exactly one line, in one of these three forms:
 
 CHAT
 SEARCH: <standalone search query>
+OFFTOPIC
+
+Choose OFFTOPIC when the message has nothing to do with coffee or its growing, \
+processing, trade or research - for example films, actors, celebrities, sports, \
+politics or general knowledge - and is not a follow-up to the coffee discussion.
 
 Choose CHAT when the message can be answered fully from the conversation so far \
 without looking anything up: reformatting, shortening or translating an earlier \
 answer ("list only the months", "show it as a table"), repeating or summarising \
-what was already said ("what did you tell me?"), or explaining a point already made.
+what was already said ("what did you tell me?"), or explaining a point already made. \
+Only choose CHAT when an earlier assistant message already contains the answer; a \
+new coffee question is always SEARCH.
 
 Choose SEARCH when the message needs information that is not already in the \
 conversation, including follow-ups about a new aspect ("how is it controlled?", \
 "what about robusta?"). Write the query so it stands alone, resolving pronouns and \
-references to earlier turns. When unsure, choose SEARCH.
+references to earlier turns. Use only words the message and conversation imply: \
+never add "coffee", "Coffee Board" or similar terms to a message that is not \
+about coffee. When unsure between CHAT and SEARCH, choose SEARCH.
 
 Conversation so far:
 {history}
@@ -141,7 +150,8 @@ def get_client() -> Groq:
 
 
 def route_question(client: Groq, history: list[dict], question: str) -> tuple[str, str]:
-    """Decide how to answer: ("search", standalone query) or ("chat", "").
+    """Decide how to answer: ("search", standalone query), ("chat", "") or
+    ("offtopic", "").
 
     Retrieval sees one query with no memory, so a follow-up like "what about
     robusta?" is rewritten to stand alone before searching. A follow-up that
@@ -169,6 +179,8 @@ def route_question(client: Groq, history: list[dict], question: str) -> tuple[st
     first = reply.splitlines()[0].strip() if reply else ""
     if first.upper().startswith("CHAT"):
         return "chat", ""
+    if first.upper().startswith("OFFTOPIC"):
+        return "offtopic", ""
     if first.upper().startswith("SEARCH"):
         query = first.split(":", 1)[1].strip() if ":" in first else ""
         return "search", query or question
@@ -197,7 +209,7 @@ def answer_stream(
 ) -> tuple[str, list[Hit], Iterator[str]]:
     """Route, retrieve if needed, then stream the answer.
 
-    Returns the mode ("search" or "chat") and the hits immediately, so a UI can
+    Returns the mode ("search", "chat" or "offtopic") and the hits immediately, so a UI can
     show sources while the text streams. In chat mode there are no new hits:
     the answer reuses the previous answer's sources.
     """
@@ -210,12 +222,12 @@ def answer_stream(
         messages.append({"role": "user", "content": question})
         hits: list[Hit] = []
     else:
-        hits = retriever.search(search_query, top_k=top_k)
+        hits = retriever.search(search_query, top_k=top_k) if mode == "search" else []
         if hits:
             messages = build_messages(question, hits, history)
         else:
-            # Nothing cleared the relevance floor: the question is off-topic
-            # (e.g. movies), not merely unanswered by the documents.
+            # The router judged it off-topic, or nothing cleared the relevance
+            # floor: not merely unanswered by the documents, but unrelated.
             messages = [{"role": "system", "content": OFF_TOPIC_PROMPT},
                         {"role": "user", "content": question}]
 
