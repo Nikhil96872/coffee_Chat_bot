@@ -83,7 +83,9 @@ if __name__ == "__main__":
         if not path.startswith("/") or len(path) < 20:
             raise SystemExit("set MCP_PATH in .env, e.g. /mcp-<20+ random characters> - "
                              "the HTTP server refuses to run without one")
-        print(f"MCP endpoint: http://{args.host}:{args.port}{path}")
+        print(f"Local URL:  http://{args.host}:{args.port}{path}")
+        for h in args.allow_host:
+            print(f"Public URL: https://{h}{path}")
         # The Host header is checked to block DNS-rebinding attacks. Requests
         # through a tunnel carry the tunnel's hostname, so it must be allowed.
         hosts = ["127.0.0.1:*", "localhost:*", *args.allow_host]
