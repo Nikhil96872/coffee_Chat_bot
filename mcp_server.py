@@ -5,11 +5,15 @@ Claude writes the answer itself; this only finds the passages, using the same
 hybrid search and reranker as the web app.
 
     python mcp_server.py            stdio, for Claude Code / Claude Desktop (.mcp.json)
-    python mcp_server.py --http     HTTP at http://127.0.0.1:8001/mcp, for a tunnel
-                                    or a public URL; add --allow-host for that URL
+    python mcp_server.py --http     HTTP at http://127.0.0.1:8001/mcp-<secret>, for
+                                    a tunnel or a public URL; add --allow-host for it
+
+Over HTTP the server answers only at MCP_PATH (from .env, e.g. /mcp-<secret>);
+every other path is a 404. The URL itself is the password - share it as one.
 """
 
 import argparse
+import os
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
@@ -75,12 +79,18 @@ if __name__ == "__main__":
     if not args.http:
         mcp.run()      # stdio: Claude Code starts it and talks to it directly
     else:
+        path = os.getenv("MCP_PATH", "")
+        if not path.startswith("/") or len(path) < 20:
+            raise SystemExit("set MCP_PATH in .env, e.g. /mcp-<20+ random characters> - "
+                             "the HTTP server refuses to run without one")
+        print(f"MCP endpoint: http://{args.host}:{args.port}{path}")
         # The Host header is checked to block DNS-rebinding attacks. Requests
         # through a tunnel carry the tunnel's hostname, so it must be allowed.
         hosts = ["127.0.0.1:*", "localhost:*", *args.allow_host]
         origins = [f"https://{h}" for h in args.allow_host]
         mcp.run(
             transport="streamable-http", host=args.host, port=args.port,
+            streamable_http_path=path,
             transport_security=TransportSecuritySettings(
                 allowed_hosts=hosts, allowed_origins=origins,
             ),
